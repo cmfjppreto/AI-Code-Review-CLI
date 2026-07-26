@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -63,132 +62,6 @@ def test_run_git_success_and_errors(mocker) -> None:
         instance._run_git("status")
 
 
-def test_get_repo_name_and_remote_url_fallbacks() -> None:
-    """It should derive the repo name and fall back when remote lookup fails."""
-    instance = make_git_utils(str(Path("/tmp/repo-name")))
-    instance._run_git = lambda *args, **kwargs: "https://example.com/org/project.git\n"
-    assert instance.get_repo_name() == "project"
-    assert instance.get_remote_url() == "https://example.com/org/project.git"
-
-    def raise_git(*args: str, **kwargs: object) -> str:
-        raise GitError("missing")
-
-    instance._run_git = raise_git
-    assert instance.get_repo_name() == "repo-name"
-    assert instance.get_remote_url() == "(no remote configured)"
-
-
-def test_list_branches_filters_head_entries() -> None:
-    """It should strip branch markers and ignore HEAD aliases."""
-    instance = make_git_utils()
-    instance._run_git = lambda *args, **kwargs: "* main\n  feature\n  origin/HEAD -> origin/main\n"
-
-    assert instance.list_branches(remote=True) == ["main", "feature"]
-
-
-def test_get_recent_commits_parses_log_entries() -> None:
-    """It should parse git log output into structured commit dictionaries."""
-    instance = make_git_utils()
-    instance._run_git = lambda *args, **kwargs: "hash|short|Alice|2024-01-01|Initial commit\n\n"
-
-    commits = instance.get_recent_commits(count=1)
-
-    assert commits == [{
-        "hash": "hash",
-        "short_hash": "short",
-        "author": "Alice",
-        "date": "2024-01-01",
-        "message": "Initial commit",
-    }]
-
-
-@pytest.mark.parametrize(
-    ("method_name", "expected_fragment"),
-    [
-        ("get_staged_diff", "No staged changes"),
-        ("get_working_diff", "No changes in working directory"),
-        ("get_commit_diff", "contains no code changes"),
-    ],
-)
-def test_diff_methods_raise_on_empty_output(method_name: str, expected_fragment: str) -> None:
-    """It should raise helpful errors when git diff output is empty."""
-    instance = make_git_utils()
-    instance._run_git = lambda *args, **kwargs: "\n"
-
-    with pytest.raises(GitError, match=expected_fragment):
-        if method_name == "get_commit_diff":
-            getattr(instance, method_name)("abc123")
-        else:
-            getattr(instance, method_name)()
-
-
-def test_get_all_changes_diff_combines_sections() -> None:
-    """It should combine staged and unstaged changes when both exist."""
-    instance = make_git_utils()
-
-    def fake_run(*args: str, **kwargs: object) -> str:
-        if args[:2] == ("diff", "--cached"):
-            return "staged"
-        if args[:1] == ("diff",):
-            return "unstaged"
-        return ""
-
-    instance._run_git = fake_run
-
-    combined = instance.get_all_changes_diff()
-
-    assert "STAGED CHANGES" in combined
-    assert "WORKING DIRECTORY CHANGES" in combined
-
-
-def test_get_all_changes_diff_raises_when_both_sections_are_empty() -> None:
-    """It should raise when there are no staged or unstaged changes."""
-    instance = make_git_utils()
-    instance._run_git = lambda *args, **kwargs: ""
-
-    with pytest.raises(GitError, match="No changes"):
-        instance.get_all_changes_diff()
-
-
-def test_get_commit_range_diff_and_file_diff() -> None:
-    """It should return populated diffs for commit ranges and individual files."""
-    instance = make_git_utils()
-    instance._run_git = lambda *args, **kwargs: "diff output"
-
-    assert instance.get_commit_range_diff("a", "b") == "diff output"
-    assert instance.get_file_diff("src/app.py", staged=True) == "diff output"
-
-
-def test_get_branch_diff_uses_merge_base_and_fallback() -> None:
-    """It should use merge-base when available and fall back to direct diff otherwise."""
-    instance = make_git_utils()
-    calls: list[tuple[str, ...]] = []
-
-    def fake_run(*args: str, **kwargs: object) -> str:
-        calls.append(args)
-        if args[0] == "merge-base":
-            return "base-hash"
-        if args[0] == "diff":
-            return "branch diff"
-        if args[0] == "branch":
-            return "main"
-        return ""
-
-    instance._run_git = fake_run
-    assert instance.get_branch_diff("feature") == "branch diff"
-    assert any(call[0] == "merge-base" for call in calls)
-
-    def fallback_run(*args: str, **kwargs: object) -> str:
-        if args[0] == "merge-base":
-            raise GitError("boom")
-        if args[0] == "diff":
-            return "direct diff"
-        return "main"
-
-    instance._run_git = fallback_run
-    assert instance.get_branch_diff("feature", "main") == "direct diff"
-
-
 def test_filter_and_split_diff_helpers(sample_diff: str) -> None:
     """It should filter additions and split multi-file diffs into sections."""
     instance = make_git_utils()
@@ -237,68 +110,43 @@ def test_truncate_diff_without_sections_and_summary(sample_diff: str) -> None:
     ]
 
 
-# ---------------------------------------------------------------------------
-# filter_diff_additions_only — FULL_FILE_CONTEXT block preservation
-# ---------------------------------------------------------------------------
 
-def test_filter_diff_additions_only_preserves_full_file_context_block() -> None:
-    """Lines inside a FULL_FILE_CONTEXT block must be kept verbatim, regardless of prefix."""
+def test_filter_diff_additions_only_preserves_xml_context_blocks() -> None:
+    """Lines inside XML context blocks (<enclosing_scopes>, etc) must be kept verbatim, regardless of prefix."""
     instance = make_git_utils()
     diff = "\n".join([
         "diff --git a/src/app.py b/src/app.py",
         "--- a/src/app.py",
         "+++ b/src/app.py",
         "@@ -1,2 +1,2 @@",
-        " this_context_line_outside",      # context — must now be KEPT
-        "-deleted_line_outside",            # deletion — must be stripped
-        "+added_line_outside",              # addition — must be kept
-        "### FULL_FILE_CONTEXT_START: /src/app.py ###",
-        "raw_context_inside",               # raw line — must be kept
-        " raw_space_inside",               # raw line — must be kept
-        "-raw_minus_inside",                # raw line — must be kept
-        "+raw_plus_inside",                 # raw line — must be kept
-        "### FULL_FILE_CONTEXT_END ###",
+        " this_context_line_outside",
+        "-deleted_line_outside",
+        "+added_line_outside",
+        "<enclosing_scopes file=\"/src/app.py\">",
+        "raw_context_inside",
+        " raw_space_inside",
+        "-raw_minus_inside",
+        "+raw_plus_inside",
+        "</enclosing_scopes>",
+        " outside_context_line_after",
     ])
 
     filtered = instance.filter_diff_additions_only(diff)
 
-    assert "this_context_line_outside" in filtered       # context lines are now kept
-    assert "deleted_line_outside" not in filtered        # deletions are still stripped
+    assert "this_context_line_outside" in filtered
+    assert "deleted_line_outside" not in filtered
     assert "+added_line_outside" in filtered
-    assert "### FULL_FILE_CONTEXT_START: /src/app.py ###" in filtered
+    assert "<enclosing_scopes file=\"/src/app.py\">" in filtered
     assert "raw_context_inside" in filtered
     assert " raw_space_inside" in filtered
     assert "-raw_minus_inside" in filtered
     assert "+raw_plus_inside" in filtered
-    assert "### FULL_FILE_CONTEXT_END ###" in filtered
-
-
-def test_filter_diff_additions_only_handles_multiple_full_file_context_blocks() -> None:
-    """All FULL_FILE_CONTEXT blocks in a multi-file diff must each be fully preserved."""
-    instance = make_git_utils()
-    diff = "\n".join([
-        "diff --git a/src/a.py b/src/a.py",
-        "+line_a",
-        "### FULL_FILE_CONTEXT_START: /src/a.py ###",
-        "content_a",
-        "### FULL_FILE_CONTEXT_END ###",
-        "diff --git a/src/b.py b/src/b.py",
-        "+line_b",
-        "### FULL_FILE_CONTEXT_START: /src/b.py ###",
-        "content_b",
-        "### FULL_FILE_CONTEXT_END ###",
-    ])
-
-    filtered = instance.filter_diff_additions_only(diff)
-
-    assert "content_a" in filtered
-    assert "content_b" in filtered
-    assert "+line_a" in filtered
-    assert "+line_b" in filtered
+    assert "</enclosing_scopes>" in filtered
+    assert " outside_context_line_after" in filtered
 
 
 def test_filter_diff_additions_only_without_context_block_keeps_context_strips_deletions() -> None:
-    """Without FULL_FILE_CONTEXT blocks the method must keep context lines and strip deletion lines."""
+    """filter_diff_additions_only must keep context lines and strip deletion lines."""
     instance = make_git_utils()
     diff = "\n".join([
         "diff --git a/src/app.py b/src/app.py",
@@ -310,25 +158,5 @@ def test_filter_diff_additions_only_without_context_block_keeps_context_strips_d
     filtered = instance.filter_diff_additions_only(diff)
 
     assert "+added_line" in filtered
-    assert "context_line" in filtered       # context lines are now kept
-    assert "removed_line" not in filtered   # deletions are still stripped
-
-
-def test_filter_diff_additions_only_context_block_ends_before_next_diff_section() -> None:
-    """The section after ### FULL_FILE_CONTEXT_END ### must revert to normal filtering (keep context, strip deletions)."""
-    instance = make_git_utils()
-    diff = "\n".join([
-        "### FULL_FILE_CONTEXT_START: /src/a.py ###",
-        "inside_block",
-        "### FULL_FILE_CONTEXT_END ###",
-        " outside_context_line",   # context — must be KEPT after block ends
-        "-outside_deleted",         # deletion — must be stripped after block ends
-        "+outside_added",           # addition — must be kept
-    ])
-
-    filtered = instance.filter_diff_additions_only(diff)
-
-    assert "inside_block" in filtered
-    assert "outside_context_line" in filtered   # context is now kept
-    assert "outside_deleted" not in filtered
-    assert "+outside_added" in filtered
+    assert "context_line" in filtered       # context lines are kept
+    assert "removed_line" not in filtered   # deletions are stripped

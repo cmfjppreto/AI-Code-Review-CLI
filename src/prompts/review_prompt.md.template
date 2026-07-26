@@ -57,12 +57,6 @@
 - Transactions: ensure multi-step critical operations are wrapped in a transaction.
 - Naming conventions for tables/columns consistent with the rest of the schema.
 
-<!-- lang: xml -->
-## XML
-- Validation against schema (XSD) where applicable.
-- Consistent formatting/indentation.
-- Avoid duplicated configuration that could be centralized.
-
 <!-- lang: html -->
 ## HTML
 - A11y: `alt`, `aria-*`, labels on inputs, semantic tags (`<button>` vs `<div onclick>`).

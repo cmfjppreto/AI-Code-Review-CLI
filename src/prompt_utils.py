@@ -40,7 +40,7 @@ def filter_prompt_by_langs(md_content: str, active_langs: set[str]) -> str:
     Parses review_prompt.md and returns only the sections whose
     <!-- lang: ... --> tag intersects with active_langs.
     """
-    active_langs = {l.strip().lower() for l in active_langs}
+    active_langs = {lang.strip().lower() for lang in active_langs}
     blocks = re.split(r"(<!--\s*lang:.*?-->)", md_content)
 
     output: list[str] = []
@@ -48,7 +48,7 @@ def filter_prompt_by_langs(md_content: str, active_langs: set[str]) -> str:
     for chunk in blocks:
         match = LANG_TAG_RE.match(chunk.strip())
         if match:
-            current_langs = {l.strip().lower() for l in match.group(1).split(",")}
+            current_langs = {lang.strip().lower() for lang in match.group(1).split(",")}
             continue
         if current_langs & active_langs:
             output.append(chunk)

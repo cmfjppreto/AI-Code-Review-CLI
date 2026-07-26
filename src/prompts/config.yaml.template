@@ -90,6 +90,16 @@ review:
   # Limit of diff lines per file (larger sections are truncated)
   max_diff_lines: 4500
 
+  # Max changed logical blocks for Enclosing Scopes strategy (diff_only mode)
+  max_scope_blocks: 3
+
+  # Max lines in a single enclosing scope before falling back to file_skeleton
+  # (prevents sending entire large classes to the LLM)
+  max_scope_lines: 250
+
+  # Surrounding lines to keep for Adaptive Diff fallback (diff_only mode)
+  adaptive_context_lines: 10
+
   # Filter by file extensions (empty list = all files)
   # Example: [".cs", ".ts"]
   file_extensions_filter: []

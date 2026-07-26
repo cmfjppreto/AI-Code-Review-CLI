@@ -159,15 +159,19 @@ def test_get_system_prompt_unknown_verbosity_falls_back_to_detailed() -> None:
 
 
 # ---------------------------------------------------------------------------
-# get_scope_guidance — diff_only with FULL_FILE_CONTEXT
+# get_scope_guidance — diff_only with XML context blocks
 # ---------------------------------------------------------------------------
 
-def test_get_scope_guidance_diff_only_references_full_file_context_markers() -> None:
-    """diff_only guidance must reference FULL_FILE_CONTEXT_START and _END for both modes."""
+def test_get_scope_guidance_diff_only_references_xml_context_tags() -> None:
+    """diff_only guidance must reference the XML context block tags, not old FULL_FILE_CONTEXT markers."""
     for structured in (False, True):
         guidance = get_scope_guidance("diff_only", structured=structured)
-        assert "FULL_FILE_CONTEXT_START" in guidance, f"structured={structured}"
-        assert "FULL_FILE_CONTEXT_END" in guidance, f"structured={structured}"
+        assert "enclosing_scopes" in guidance, f"structured={structured}"
+        assert "file_skeleton" in guidance, f"structured={structured}"
+        assert "adaptive_diff" in guidance, f"structured={structured}"
+        # Must NOT reference the old sentinel markers
+        assert "FULL_FILE_CONTEXT_START" not in guidance, f"structured={structured}"
+        assert "FULL_FILE_CONTEXT_END" not in guidance, f"structured={structured}"
 
 
 def test_get_scope_guidance_diff_only_structured_demands_valid_line_number() -> None:
@@ -194,21 +198,24 @@ def test_get_scope_guidance_unknown_scope_falls_back_to_diff_only() -> None:
     guidance = get_scope_guidance("unknown_scope")
 
     assert "diff_only" in guidance
-    assert "FULL_FILE_CONTEXT_START" in guidance
+    assert "enclosing_scopes" in guidance
 
 
 def test_build_user_message_includes_files_and_context() -> None:
-    """It should compose files, context and diff sections."""
+    """build_user_message must emit XML structure with <context>, <diff> and optional context blocks."""
     message = build_user_message(
         diff="+print('x')",
         files_summary=[{"file": "src/app.py", "additions": 1, "deletions": 0}],
         context="Please focus on safety.",
     )
 
-    assert "Changed Files" in message
+    assert "<context>" in message
+    assert "<changed_files>" in message
     assert "src/app.py" in message
+    assert "<additional_context>" in message
     assert "Please focus on safety." in message
-    assert "```diff" in message
+    assert "<diff>" in message
+    assert "</diff>" in message
 
 
 def test_load_custom_prompt_text_variants(tmp_path: Path, mocker) -> None:

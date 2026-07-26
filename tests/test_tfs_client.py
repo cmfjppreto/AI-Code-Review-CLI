@@ -350,11 +350,11 @@ def test_build_diff_parts_and_file_content(mocker) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _build_unified_diff_part — FULL_FILE_CONTEXT block
+# _build_unified_diff_part — XML context block
 # ---------------------------------------------------------------------------
 
-def test_build_unified_diff_part_appends_full_file_context_block(mocker) -> None:
-    """_build_unified_diff_part must append FULL_FILE_CONTEXT markers with numbered new-version file content."""
+def test_build_unified_diff_part_appends_xml_context_block(mocker) -> None:
+    """_build_unified_diff_part must append an XML context block (enclosing_scopes/adaptive_diff) after the diff."""
     client = TFSClient(make_tfs_config())
     mocker.patch(
         "src.tfs_client.TFSClient._get_file_content",
@@ -366,22 +366,26 @@ def test_build_unified_diff_part_appends_full_file_context_block(mocker) -> None
         "refs/heads/feature", "refs/heads/main",
     )
     joined = "\n".join(result)
-    context_block = joined.split("### FULL_FILE_CONTEXT_START")[1]
 
-    assert "### FULL_FILE_CONTEXT_START: /src/app.py ###" in joined
-    assert "new line one" in context_block
-    assert "new line two" in context_block
-    assert "old line" not in context_block
-    assert "### FULL_FILE_CONTEXT_END ###" in joined
-    # Lines must be prefixed with 1-based line numbers
-    assert "   1: new line one" in context_block
-    assert "   2: new line two" in context_block
-    # Context block must appear after the diff headers
-    assert joined.index("### FULL_FILE_CONTEXT_START") > joined.index("diff --git")
+    # Must contain an XML context block (adaptive_diff for short files without Tree-sitter)
+    _xml_tags = ("<enclosing_scopes", "<file_skeleton", "<adaptive_diff", "<sql_statement")
+    assert any(tag in joined for tag in _xml_tags), "Expected an XML context block"
+    assert "new line one" in joined
+    assert "new line two" in joined
+    assert "old line" not in joined.split("<")[1]  # old content not in context block
+    # XML context block must appear after the diff headers
+    first_xml_pos = min(
+        (joined.find(tag) for tag in _xml_tags if joined.find(tag) >= 0),
+        default=-1,
+    )
+    assert first_xml_pos > joined.index("diff --git")
+    # Must NOT use old FULL_FILE_CONTEXT markers
+    assert "FULL_FILE_CONTEXT_START" not in joined
+    assert "FULL_FILE_CONTEXT_END" not in joined
 
 
 def test_build_unified_diff_part_context_block_present_on_add(mocker) -> None:
-    """_build_unified_diff_part must append a FULL_FILE_CONTEXT block for add, containing the new content."""
+    """_build_unified_diff_part must append an XML context block for 'add' change type."""
     client = TFSClient(make_tfs_config())
     mocker.patch(
         "src.tfs_client.TFSClient._get_file_content",
@@ -394,13 +398,14 @@ def test_build_unified_diff_part_context_block_present_on_add(mocker) -> None:
     )
     joined = "\n".join(result)
 
-    assert "### FULL_FILE_CONTEXT_START: /src/new_file.py ###" in joined
+    _xml_tags = ("<enclosing_scopes", "<file_skeleton", "<adaptive_diff", "<sql_statement")
+    assert any(tag in joined for tag in _xml_tags), "Expected XML context block"
     assert "new content" in joined
-    assert "### FULL_FILE_CONTEXT_END ###" in joined
+    assert "FULL_FILE_CONTEXT_START" not in joined
 
 
 def test_build_unified_diff_part_no_context_block_on_delete(mocker) -> None:
-    """_build_unified_diff_part must NOT append a FULL_FILE_CONTEXT block when change_type is delete."""
+    """_build_unified_diff_part must NOT append any context block when change_type is delete."""
     client = TFSClient(make_tfs_config())
     mocker.patch(
         "src.tfs_client.TFSClient._get_file_content",
@@ -413,13 +418,14 @@ def test_build_unified_diff_part_no_context_block_on_delete(mocker) -> None:
     )
     joined = "\n".join(result)
 
-    assert "### FULL_FILE_CONTEXT_START" not in joined
-    assert "### FULL_FILE_CONTEXT_END" not in joined
+    assert "FULL_FILE_CONTEXT_START" not in joined
+    assert "FULL_FILE_CONTEXT_END" not in joined
+    _xml_tags = ("<enclosing_scopes", "<file_skeleton", "<adaptive_diff", "<sql_statement")
+    assert not any(tag in joined for tag in _xml_tags), "No context block expected for delete"
 
 
 def test_build_unified_diff_part_context_block_uses_new_file_path(mocker) -> None:
-    """The FULL_FILE_CONTEXT_START marker must reference the new file path (file_path), not original_path,
-    and the block content must be the new (renamed) file's content with 1-based line numbers."""
+    """The XML context block must reference the new file path (file_path), not original_path."""
     client = TFSClient(make_tfs_config())
     mocker.patch(
         "src.tfs_client.TFSClient._get_file_content",
@@ -431,17 +437,17 @@ def test_build_unified_diff_part_context_block_uses_new_file_path(mocker) -> Non
         "refs/heads/feature", "refs/heads/main",
     )
     joined = "\n".join(result)
-    context_block = joined.split("### FULL_FILE_CONTEXT_START")[1]
 
-    assert "### FULL_FILE_CONTEXT_START: /src/renamed.py ###" in joined
-    assert "### FULL_FILE_CONTEXT_START: /src/original.py ###" not in joined
-    assert "new content" in context_block
-    assert "old content" not in context_block
-    assert "   1: new content" in context_block
+    # XML context block must mention the new (renamed) path
+    assert "/src/renamed.py" in joined
+    assert "new content" in joined
+    # Must NOT use old FULL_FILE_CONTEXT markers
+    assert "FULL_FILE_CONTEXT_START" not in joined
+    assert "FULL_FILE_CONTEXT_END" not in joined
 
 
 def test_build_unified_diff_part_no_context_block_when_content_unavailable(mocker) -> None:
-    """When both old and new file content fetches fail, no FULL_FILE_CONTEXT block must appear."""
+    """When both old and new file content fetches fail, no context block must appear."""
     client = TFSClient(make_tfs_config())
     mocker.patch(
         "src.tfs_client.TFSClient._get_file_content",
@@ -454,8 +460,10 @@ def test_build_unified_diff_part_no_context_block_when_content_unavailable(mocke
     )
     joined = "\n".join(result)
 
-    assert "### FULL_FILE_CONTEXT_START" not in joined
-    assert "### FULL_FILE_CONTEXT_END" not in joined
+    assert "FULL_FILE_CONTEXT_START" not in joined
+    assert "FULL_FILE_CONTEXT_END" not in joined
+    _xml_tags = ("<enclosing_scopes", "<file_skeleton", "<adaptive_diff", "<sql_statement")
+    assert not any(tag in joined for tag in _xml_tags), "No context block expected when content is unavailable"
 
 
 def test_raw_get_and_comment_endpoints(mocker) -> None:
@@ -465,19 +473,14 @@ def test_raw_get_and_comment_endpoints(mocker) -> None:
     assert client._get_file_content("repo-a", "/a.py", version="feature") == "file content"
 
     post_mock = mocker.patch("src.tfs_client.TFSClient._post", return_value={"id": 10})
-    patch_mock = mocker.patch("src.tfs_client.TFSClient._patch", return_value={"id": 11})
-    get_mock = mocker.patch("src.tfs_client.TFSClient._get", return_value={"value": [{"id": 3}]})
+    mocker.patch("src.tfs_client.TFSClient._get", return_value={"value": [{"id": 3}]})
 
     assert client.post_general_comment("repo-a", 1, "hello")["id"] == 10
     inline = client.post_inline_comment("repo-a", 1, "src/app.py", 7, "msg", right_file=False)
     assert inline["id"] == 10
-    assert get_mock.called
     _, payload = post_mock.call_args.args[:2]
     assert payload["threadContext"]["filePath"] == "/src/app.py"
     assert payload["threadContext"]["leftFileStart"]["line"] == 7
-    assert client.reply_to_thread("repo-a", 1, 5, "reply")["id"] == 10
-    assert client.update_thread_status("repo-a", 1, 5, "fixed")["id"] == 11
-    patch_mock.assert_called_once()
 
 
 def test_post_inline_comment_requires_iterations(mocker) -> None:

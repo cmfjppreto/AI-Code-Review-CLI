@@ -1,11 +1,8 @@
 """
 Git Utilities Module - AI Code Review
 ========================================
-Responsible for capturing Git diffs in different scenarios:
-- Staged changes (before commit)
-- Specific commits
-- Differences between branches
-- Working directory changes
+Provides diff filtering, splitting, truncation and file-summary helpers
+used by the PR review pipeline.
 
 Works with any Git repository, including TFS/Azure DevOps.
 """
@@ -84,200 +81,6 @@ class GitUtils:
         except subprocess.TimeoutExpired:
             raise GitError(f"Timeout executing: {' '.join(cmd)}")
 
-    # ------------------------------------------------------------------
-    # Repository information
-    # ------------------------------------------------------------------
-    def get_current_branch(self) -> str:
-        """Returns the current branch name."""
-        return self._run_git("branch", "--show-current").strip()
-
-    def get_repo_name(self) -> str:
-        """Returns the repository name."""
-        try:
-            remote_url = self._run_git("remote", "get-url", "origin").strip()
-            # Extract repo name from URL
-            name = remote_url.rstrip("/").split("/")[-1]
-            if name.endswith(".git"):
-                name = name[:-4]
-            return name
-        except GitError:
-            return os.path.basename(self.repo_path)
-
-    def get_remote_url(self) -> str:
-        """Returns the remote origin URL."""
-        try:
-            return self._run_git("remote", "get-url", "origin").strip()
-        except GitError:
-            return "(no remote configured)"
-
-    def list_branches(self, remote: bool = False) -> list[str]:
-        """Lists available branches."""
-        args = ["branch"]
-        if remote:
-            args.append("-r")
-        output = self._run_git(*args)
-        branches = []
-        for line in output.strip().split("\n"):
-            branch = line.strip().lstrip("* ").strip()
-            if branch and "HEAD" not in branch:
-                branches.append(branch)
-        return branches
-
-    def get_recent_commits(self, count: int = 10, branch: Optional[str] = None) -> list[dict]:
-        """
-        Returns the most recent commits.
-        
-        Returns:
-            List of dicts with 'hash', 'short_hash', 'author', 'date', 'message'.
-        """
-        args = [
-            "log",
-            f"-{count}",
-            "--pretty=format:%H|%h|%an|%ai|%s",
-        ]
-        if branch:
-            args.append(branch)
-
-        output = self._run_git(*args)
-        commits = []
-        for line in output.strip().split("\n"):
-            if not line.strip():
-                continue
-            parts = line.split("|", 4)
-            if len(parts) == 5:
-                commits.append({
-                    "hash": parts[0],
-                    "short_hash": parts[1],
-                    "author": parts[2],
-                    "date": parts[3],
-                    "message": parts[4],
-                })
-        return commits
-
-    # ------------------------------------------------------------------
-    # Diff capture
-    # ------------------------------------------------------------------
-    def get_staged_diff(self) -> str:
-        """
-        Captures the diff of staged files (git add).
-        Used for review before committing.
-        """
-        diff = self._run_git("diff", "--cached", "--no-color")
-        if not diff.strip():
-            raise GitError(
-                "No staged changes found.\n"
-                "Use 'git add <file>' to add files to staging."
-            )
-        return diff
-
-    def get_working_diff(self) -> str:
-        """
-        Captures the diff of modified files in the working directory.
-        (Changes not yet added to staging.)
-        """
-        diff = self._run_git("diff", "--no-color")
-        if not diff.strip():
-            raise GitError(
-                "No changes in working directory.\n"
-                "Files may already be staged (use --staged)."
-            )
-        return diff
-
-    def get_all_changes_diff(self) -> str:
-        """
-        Captures the diff of ALL changes (staged + unstaged).
-        """
-        staged = self._run_git("diff", "--cached", "--no-color", check=False)
-        unstaged = self._run_git("diff", "--no-color", check=False)
-
-        combined = ""
-        if staged.strip():
-            combined += f"# === STAGED CHANGES ===\n{staged}\n"
-        if unstaged.strip():
-            combined += f"# === WORKING DIRECTORY CHANGES ===\n{unstaged}\n"
-
-        if not combined.strip():
-            raise GitError("No changes (staged or unstaged) in the repository.")
-
-        return combined
-
-    def get_commit_diff(self, commit_hash: str) -> str:
-        """
-        Captures the diff of a specific commit.
-        
-        Args:
-            commit_hash: Commit hash (full or abbreviated).
-        """
-        diff = self._run_git("show", commit_hash, "--no-color", "--format=")
-        if not diff.strip():
-            raise GitError(f"Commit '{commit_hash}' contains no code changes.")
-        return diff
-
-    def get_commit_range_diff(self, from_commit: str, to_commit: str = "HEAD") -> str:
-        """
-        Captures the diff between two commits.
-        
-        Args:
-            from_commit: Starting commit hash.
-            to_commit: Ending commit hash (default: HEAD).
-        """
-        diff = self._run_git("diff", f"{from_commit}..{to_commit}", "--no-color")
-        if not diff.strip():
-            raise GitError(
-                f"No differences between '{from_commit}' and '{to_commit}'."
-            )
-        return diff
-
-    def get_branch_diff(self, source_branch: str, target_branch: Optional[str] = None) -> str:
-        """
-        Captures the diff between two branches.
-        Useful to simulate a Pull Request diff.
-        
-        Args:
-            source_branch: Branch with changes (feature branch).
-            target_branch: Target branch (default: current branch).
-        """
-        if target_branch is None:
-            target_branch = self.get_current_branch()
-
-        # Use merge-base to get the correct diff (like a real PR)
-        try:
-            merge_base = self._run_git(
-                "merge-base", target_branch, source_branch
-            ).strip()
-            diff = self._run_git(
-                "diff", f"{merge_base}..{source_branch}", "--no-color"
-            )
-        except GitError:
-            # Fallback: direct diff between branches
-            diff = self._run_git(
-                "diff", f"{target_branch}..{source_branch}", "--no-color"
-            )
-
-        if not diff.strip():
-            raise GitError(
-                f"No differences between '{target_branch}' and '{source_branch}'."
-            )
-        return diff
-
-    def get_file_diff(self, file_path: str, staged: bool = False) -> str:
-        """
-        Captures the diff of a specific file.
-        
-        Args:
-            file_path: File path.
-            staged: If True, captures diff from staging.
-        """
-        args = ["diff", "--no-color"]
-        if staged:
-            args.append("--cached")
-        args.append("--")
-        args.append(file_path)
-
-        diff = self._run_git(*args)
-        if not diff.strip():
-            raise GitError(f"No changes in file '{file_path}'.")
-        return diff
 
     # ------------------------------------------------------------------
     # Filters and Utilities
@@ -285,7 +88,7 @@ class GitUtils:
     def filter_diff_additions_only(self, diff: str) -> str:
         """
         Removes deleted lines (-) from the diff, keeping context lines and added lines.
-        Structural headers are always preserved.
+        Structural headers and XML context blocks are always preserved.
 
         Lines kept:
             - ``diff --git ...``
@@ -294,42 +97,38 @@ class GitUtils:
             - ``@@ ... @@``
             - ``+ <content>`` (added lines)
             - `` <content>`` (context lines — unchanged surrounding code)
+            - Lines inside XML context blocks (``<enclosing_scopes>``, ``<file_skeleton>``, etc.)
 
         Lines removed:
             - ``- <content>`` (deleted lines)
             - ``\\ No newline ...`` markers
 
-        FULL_FILE_CONTEXT blocks — delimited by
-        ``### FULL_FILE_CONTEXT_START: <path> ###`` and
-        ``### FULL_FILE_CONTEXT_END ###`` — are preserved in their entirety.
-        These blocks are appended by
-        :py:meth:`TFSClient._build_unified_diff_part` and carry the complete
-        new-version file content (with line numbers) as read-only background
-        for the LLM.  Every line between the sentinel markers is kept,
-        regardless of whether it starts with ``+``, ``-``, or a space.
-
         Args:
-            diff: Raw unified diff string, possibly containing
-                FULL_FILE_CONTEXT blocks.
+            diff: Raw unified diff string.
 
         Returns:
-            Filtered diff string with deleted lines stripped but context lines
-            and FULL_FILE_CONTEXT blocks intact.
+            Filtered diff string with deleted lines stripped but context lines intact.
         """
         result = []
-        in_context_block = False
+        in_xml_block = False
+        _xml_start_tags = ("<enclosing_scopes", "<file_skeleton", "<adaptive_diff", "<sql_statement")
+        _xml_end_tags = ("</enclosing_scopes>", "</file_skeleton>", "</adaptive_diff>", "</sql_statement>")
+
         for line in diff.split("\n"):
-            if line.startswith("### FULL_FILE_CONTEXT_START:"):
-                in_context_block = True
+            if any(line.startswith(tag) for tag in _xml_start_tags):
+                in_xml_block = True
                 result.append(line)
                 continue
-            if line.startswith("### FULL_FILE_CONTEXT_END"):
-                in_context_block = False
+            
+            if any(line.startswith(tag) for tag in _xml_end_tags):
+                in_xml_block = False
                 result.append(line)
                 continue
-            if in_context_block:
+
+            if in_xml_block:
                 result.append(line)
                 continue
+
             if (
                 line.startswith("diff --git")
                 or line.startswith("--- ")
