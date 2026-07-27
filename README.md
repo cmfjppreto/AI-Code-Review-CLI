@@ -2,8 +2,6 @@
 
 Automated code review tool with Pull Request integration for Azure DevOps/TFS and support for multiple LLM providers.
 
-The main entry point is in `src/ai_review.py`. The project also includes dedicated modules for configuration, output formatting, Git diff capture, TFS/Azure DevOps integration, and communication with the LLM provider.
-
 ## Features
 
 - AI Pull Request review (`pr-review`)
@@ -24,11 +22,12 @@ pip install code-review-ai-cli
 Or install with optional LLM SDK extras:
 
 ```bash
-pip install "code-review-ai-cli[bedrock]"    # AWS Bedrock
-pip install "code-review-ai-cli[openai]"     # OpenAI SDK
-pip install "code-review-ai-cli[gemini]"     # Google Gemini SDK
-pip install "code-review-ai-cli[claude]"     # Anthropic Claude SDK
-pip install "code-review-ai-cli[all]"        # All optional SDKs
+pip install "code-review-ai-cli[bedrock]"      # AWS Bedrock
+pip install "code-review-ai-cli[openai]"       # OpenAI SDK
+pip install "code-review-ai-cli[gemini]"       # Google Gemini SDK
+pip install "code-review-ai-cli[claude]"       # Anthropic Claude SDK
+pip install "code-review-ai-cli[tree-sitter]" # AST context extraction (C#/Java/JS/TS/Python/SQL)
+pip install "code-review-ai-cli[all]"          # All optional SDKs
 ```
 
 All providers also work without their optional SDK — the tool communicates via HTTP directly.
@@ -103,10 +102,22 @@ output:
 
 | Scope | Description |
 |---|---|
-| `diff_only` | Default. Unified diff (changed lines only) + full file content as read-only context. |
+| `diff_only` | Default. Unified diff (changed lines only) + AST-based context block (Enclosing Scopes, File Skeleton, or Adaptive Diff). |
 | `full_code` | All lines of the new file version, every line prefixed with `+`. No baseline. |
 
-#### `diff_only` — diff with context (default)
+#### `diff_only` — diff with AST context (default)
+
+In `diff_only` mode the tool automatically selects the most token-efficient context
+strategy for each changed file:
+
+| Strategy | When used | XML tag |
+|---|---|---|
+| **Enclosing Scopes** | ≤ 3 distinct changed blocks | `<enclosing_scopes file="...">` |
+| **File Skeleton** | > 3 distinct changed blocks | `<file_skeleton file="...">` |
+| **SQL Statement** | SQL files | `<sql_statement file="...">` |
+| **Adaptive Diff** | Tree-sitter unavailable / unsupported language | `<adaptive_diff file="...">` |
+
+Supported languages for AST parsing: **Python, JavaScript, TypeScript, TSX, C#, Java, SQL**.
 
 ```yaml
 review:

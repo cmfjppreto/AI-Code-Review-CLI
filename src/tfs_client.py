@@ -19,6 +19,7 @@ import os
 from typing import Optional
 
 from .config import ReviewConfig
+from .context_extractor import ContextExtractor
 
 
 class TFSError(Exception):
@@ -47,6 +48,11 @@ class TFSClient:
             )
 
         self._session = None
+        self._context_extractor = ContextExtractor(
+            max_scope_blocks=config.max_scope_blocks,
+            max_scope_lines=config.max_scope_lines,
+            adaptive_context_lines=config.adaptive_context_lines,
+        )
 
     @property
     def session(self):
@@ -300,20 +306,16 @@ class TFSClient:
         Gets the diff of a specific Pull Request.
 
         For ``diff_only`` scope (default), builds a standard unified diff for
-        each changed file and appends the full new-version (source branch) file
-        content as a clearly-marked read-only block::
+        each changed file and appends an XML context block produced by
+        :class:`~src.context_extractor.ContextExtractor` (one of
+        ``<enclosing_scopes>``, ``<file_skeleton>``, ``<sql_statement>``, or
+        ``<adaptive_diff>``).  The block is preserved verbatim by
+        :py:meth:`GitUtils.filter_diff_additions_only` so the LLM receives
+        structured scope context without consuming the entire file.
 
-            ### FULL_FILE_CONTEXT_START: /path/to/file ###
-            <full file content — after changes>
-            ### FULL_FILE_CONTEXT_END ###
-
-        This block is preserved by
-        :py:meth:`GitUtils.filter_diff_additions_only` so that the LLM
-        receives the complete resulting file as context, without being asked
-        to review unchanged lines.
-
-        For ``full_code`` scope, only the new-version file content is sent
-        (every line prefixed with ``+``), without a ``-`` baseline.
+        For ``full_code`` scope, every line of the new-version file is prefixed
+        with ``+``, producing a pseudo-diff that represents the complete file
+        as added content.
 
         Args:
             repository: Repository name.
@@ -442,20 +444,19 @@ class TFSClient:
         from the source branch, then generates a standard unified diff with
         3 lines of context using :py:mod:`difflib`.
 
-        After the diff lines, the **full new-version (source branch, post-change)
-        file content** is appended as a read-only context block bounded by
-        sentinel markers::
+        After the diff lines an XML context block is appended, produced by
+        :class:`~src.context_extractor.ContextExtractor`:
 
-            ### FULL_FILE_CONTEXT_START: /path/to/file ###
-            <complete file content — not a diff, not prefixed with +/->
-            ### FULL_FILE_CONTEXT_END ###
+        * ``<enclosing_scopes>`` — the function(s)/method(s) enclosing
+          the changed lines (Scenario A: ≤ max_scope_blocks distinct blocks)
+        * ``<file_skeleton>`` — structural outline of the whole file
+          (Scenario B: > max_scope_blocks blocks, or scope exceeds max_scope_lines)
+        * ``<sql_statement>`` — the full SQL statement for SQL files
+        * ``<adaptive_diff>`` — surrounding context lines when AST parsing
+          is unavailable or the language is unsupported
 
-        These markers are recognised by
-        :py:meth:`GitUtils.filter_diff_additions_only`, which preserves every
-        line inside the block.  This gives the LLM the complete resulting file
-        so it can correctly understand line numbers and surrounding code for
-        the added lines, avoiding confusion from showing stale pre-change
-        content.
+        The XML block is preserved verbatim by
+        :py:meth:`GitUtils.filter_diff_additions_only`.
 
         Args:
             repository: Repository name.
@@ -467,8 +468,7 @@ class TFSClient:
             target_branch: Target branch ref (base branch — old version).
 
         Returns:
-            List of diff strings for this file, including the
-            ``FULL_FILE_CONTEXT`` block when old content is available.
+            List of diff strings for this file, including the XML context block.
         """
         old_lines: list[str] = []
         new_lines: list[str] = []
@@ -519,21 +519,22 @@ class TFSClient:
 
         # difflib does not include the "diff --git" header — always add it
         # so that filter_diff_by_extensions and _split_diff_sections work correctly.
-        result = [f"diff --git a{original_path} b{file_path}"] + diff
+        raw_diff = list(diff)
+        result = [f"diff --git a{original_path} b{file_path}"] + raw_diff
 
-        # Include new-version file content as read-only context for the LLM.
-        # Using the post-change (source branch) content gives the LLM the
-        # complete resulting file so it can correctly understand line numbers
-        # and surrounding code for the added lines, avoiding confusion from
-        # showing stale pre-change content.
-        # Lines are numbered (1-based) so the LLM can use them as the
-        # authoritative reference when reporting issue positions.
-        # delete is excluded automatically because new_lines is empty for deleted files.
+        # Build the AST-based context block (Enclosing Scopes / File Skeleton /
+        # Adaptive Diff fallback) and append it after the diff section.
         if new_lines:
-            result.append(f"### FULL_FILE_CONTEXT_START: {file_path} ###")
-            for i, line in enumerate(new_lines, start=1):
-                result.append(f"{i:4d}: {line}")
-            result.append("### FULL_FILE_CONTEXT_END ###")
+            new_content = "\n".join(new_lines)
+            file_diff_text = "\n".join(result)
+            changed_lines = ContextExtractor.changed_lines_from_diff(file_diff_text)
+            _strategy, xml_block = self._context_extractor.extract(
+                file_path=file_path,
+                new_content=new_content,
+                changed_lines=changed_lines,
+            )
+            if xml_block:
+                result.append(xml_block)
 
         return result
 
@@ -654,52 +655,6 @@ class TFSClient:
             },
         }
         return self._post(path, data)
-
-    def reply_to_thread(self, repository: str, pr_id: int,
-                        thread_id: int, comment: str) -> dict:
-        """
-        Replies to an existing comment thread.
-        
-        Args:
-            repository: Repository name.
-            pr_id: Pull Request ID.
-            thread_id: Thread ID to reply to.
-            comment: Reply text.
-            
-        Returns:
-            Created comment data.
-        """
-        path = (
-            f"git/repositories/{repository}/pullrequests/{pr_id}"
-            f"/threads/{thread_id}/comments"
-        )
-        data = {
-            "parentCommentId": 1,  # Reply to the first comment
-            "content": comment,
-            "commentType": 1,
-        }
-        return self._post(path, data)
-
-    def update_thread_status(self, repository: str, pr_id: int,
-                             thread_id: int, status: str) -> dict:
-        """
-        Updates the status of a comment thread.
-        
-        Args:
-            repository: Repository name.
-            pr_id: Pull Request ID.
-            thread_id: Thread ID.
-            status: New status ("active", "fixed", "wontFix", "closed", "pending").
-            
-        Returns:
-            Updated thread data.
-        """
-        path = (
-            f"git/repositories/{repository}/pullrequests/{pr_id}"
-            f"/threads/{thread_id}"
-        )
-        data = {"status": self._status_to_int(status)}
-        return self._patch(path, data)
 
     def post_review_comments(self, repository: str, pr_id: int,
                              comments: list[dict],

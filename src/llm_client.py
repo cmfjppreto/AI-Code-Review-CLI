@@ -143,13 +143,26 @@ def get_scope_guidance(review_scope: str, structured: bool = False) -> str:
 
     * Added lines are prefixed with ``+`` and context lines (unchanged code)
       have no prefix. Deleted lines are not included.
-    * A ``### FULL_FILE_CONTEXT_START: <path> ###`` /
-      ``### FULL_FILE_CONTEXT_END ###`` block is embedded in the payload for
-      each changed file, containing the complete new-version (after changes)
-      file content with **1-based line numbers** as **read-only** background.
-    * The review must focus **exclusively** on the changed lines (``+``); the
-      full-file section exists only to provide a global view and authoritative
-      line numbers for the LLM.
+    * An XML context block is provided for each changed file, containing
+      either:
+
+      - ``<enclosing_scopes file="...">`` — the complete function(s) or
+        method(s) that enclose the changed lines (Scenario A, ≤3 blocks).
+      - ``<file_skeleton file="...">`` — a structural skeleton of the file
+        with unchanged function bodies replaced by ``...`` (Scenario B,
+        >3 blocks).
+      - ``<sql_statement file="...">`` — the full SQL statement containing
+        the changed lines.
+      - ``<adaptive_diff file="...">`` — N lines of context around the
+        changed lines when Tree-sitter is unavailable or the language is
+        not supported.
+
+    * Line numbers inside the XML blocks are **1-based absolute** line
+      numbers from the new version of the file and should be used as the
+      authoritative reference when reporting issue positions.
+    * The review must focus **exclusively** on the changed lines (``+`` in
+      the ``<diff>`` block); the XML context blocks exist only for
+      structural understanding.
 
     For ``full_code`` scope, the instructions inform the LLM that the diff
     represents the entire new file content (every line prefixed with ``+``)
@@ -175,48 +188,123 @@ def get_scope_guidance(review_scope: str, structured: bool = False) -> str:
 
     if structured:
         return (
-            "Review scope: diff_only. The diff contains added lines (marked +) and surrounding "
-            "context lines (unchanged code, no prefix). Deleted lines were removed. "
-            "The complete new-version file content with 1-based line numbers is provided for each file "
-            "between ### FULL_FILE_CONTEXT_START and ### FULL_FILE_CONTEXT_END markers as read-only background. "
-            "Use the line numbers in FULL_FILE_CONTEXT as the authoritative reference when reporting issues. "
-            "Focus your review EXCLUSIVELY on the changed lines (marked + in the diff). "
+            "Review scope: diff_only. "
+            "The <diff> block contains added lines (marked +) and surrounding context lines "
+            "(unchanged code, no prefix). Deleted lines were removed. "
+            "An XML context block is provided for each changed file: "
+            "<enclosing_scopes> contains the complete function(s)/method(s) enclosing the changes; "
+            "<file_skeleton> contains a structural skeleton for files with many spread changes; "
+            "<sql_statement> contains the full SQL statement for SQL files; "
+            "<adaptive_diff> contains surrounding context lines when AST parsing is unavailable. "
+            "Line numbers inside XML context blocks are 1-based absolute line numbers from the new file. "
+            "Use those line numbers as the authoritative reference when reporting issue positions. "
+            "Focus your review EXCLUSIVELY on the changed lines (marked + in <diff>). "
             "Do NOT report issues in context or unchanged lines unless they directly affect the correctness of the changes. "
             "For every problem, you MUST provide a valid file and line (>0) to allow inline comments. "
             "Do not emit general problem comments without file/line."
         )
 
     return (
-        "Review scope: diff_only. The diff contains added lines (marked +) and surrounding "
-        "context lines (unchanged code, no prefix). Deleted lines were removed. "
-        "The complete new-version file content with 1-based line numbers "
-        "(between ### FULL_FILE_CONTEXT_START and ### FULL_FILE_CONTEXT_END markers) "
-        "is provided for each file as read-only background. "
-        "Use the line numbers in FULL_FILE_CONTEXT as the authoritative reference when reporting issues. "
+        "Review scope: diff_only. "
+        "The <diff> block contains added lines (marked +) and surrounding context lines "
+        "(unchanged code, no prefix). Deleted lines were removed. "
+        "An XML context block is provided for each changed file "
+        "(<enclosing_scopes>, <file_skeleton>, <sql_statement>, or <adaptive_diff>) "
+        "as read-only structural background. "
+        "Line numbers inside XML context blocks are 1-based absolute line numbers from the new file. "
+        "Use those line numbers as the authoritative reference when reporting issue positions. "
         "Focus your review EXCLUSIVELY on the changed lines. "
         "Do NOT report issues in context or unchanged lines unless they directly affect the correctness of the changes."
     )
 
 
 def build_user_message(diff: str, files_summary: list[dict], context: str = "") -> str:
+    """Builds the user message with the diff and context using XML structure.
+
+    The message uses XML tags to clearly separate context from the diff,
+    guiding the LLM's attention to the changed lines while making the
+    structural context available as background reference.
+
+    Args:
+        diff: Unified diff string (may include XML context blocks appended
+            by ``TFSClient._build_unified_diff_part``).
+        files_summary: List of dicts with ``file``, ``additions``,
+            ``deletions`` keys summarising the changed files.
+        context: Optional free-text context provided by the user.
+
+    Returns:
+        Formatted user message string ready to be sent to the LLM.
     """
-    Builds the user message with the diff and context.
-    """
-    parts = []
+    parts: list[str] = []
+
+    # --- Outer context wrapper (metadata) ---
+    context_inner: list[str] = []
 
     if files_summary:
-        parts.append("### Changed Files:")
+        files_lines = []
         for f in files_summary:
-            parts.append(
-                f"  - `{f['file']}` (+{f['additions']}/-{f['deletions']})"
+            files_lines.append(
+                f"  {f['file']} (+{f['additions']}/-{f['deletions']})"
             )
-        parts.append("")
+        context_inner.append(
+            "<changed_files>\n" + "\n".join(files_lines) + "\n</changed_files>"
+        )
 
     if context:
-        parts.append(f"### Additional context:\n{context}\n")
+        context_inner.append(
+            f"<additional_context>\n{context}\n</additional_context>"
+        )
 
-    parts.append("### Diff for review:")
-    parts.append(f"```diff\n{diff}\n```")
+    if context_inner:
+        parts.append("<context>\n" + "\n".join(context_inner) + "\n</context>")
+
+    # --- Split diff lines from XML context blocks ---
+    # XML context blocks (enclosing_scopes, file_skeleton, etc.) are already
+    # embedded inside the diff string by TFSClient._build_unified_diff_part.
+    # We extract them here and render them separately so the LLM sees:
+    #   <diff>  ... pure unified diff ...</diff>
+    #   <enclosing_scopes file="..."> ... </enclosing_scopes>
+    #   (etc.)
+    diff_lines: list[str] = []
+    xml_blocks: list[str] = []
+    _xml_buffer: list[str] = []
+    _in_xml = False
+    _xml_tags = (
+        "<enclosing_scopes ",
+        "<file_skeleton ",
+        "<sql_statement ",
+        "<adaptive_diff ",
+    )
+    _xml_close = (
+        "</enclosing_scopes>",
+        "</file_skeleton>",
+        "</sql_statement>",
+        "</adaptive_diff>",
+    )
+
+    for line in diff.splitlines():
+        if not _in_xml and any(line.startswith(t) for t in _xml_tags):
+            _in_xml = True
+            _xml_buffer = [line]
+            continue
+        if _in_xml:
+            _xml_buffer.append(line)
+            if any(line.strip() == c for c in _xml_close):
+                xml_blocks.append("\n".join(_xml_buffer))
+                _xml_buffer = []
+                _in_xml = False
+            continue
+        diff_lines.append(line)
+
+    # Flush any unclosed XML buffer (safety net)
+    if _xml_buffer:
+        xml_blocks.append("\n".join(_xml_buffer))
+
+    pure_diff = "\n".join(diff_lines)
+    parts.append(f"<diff>\n{pure_diff}\n</diff>")
+
+    # Append XML context blocks after the diff
+    parts.extend(xml_blocks)
 
     return "\n".join(parts)
 
@@ -303,7 +391,7 @@ class LLMClient:
         # filter custom_prompt sections by the languages/extensions actually changed
         if custom_prompt:
             file_paths = [f.get("file") for f in files_summary]
-            active_langs = detect_langs(file_paths)
+            active_langs = detect_langs([p for p in file_paths if p is not None])
             custom_prompt = filter_prompt_by_langs(custom_prompt, active_langs) # can return an empty list
 
         scope_guidance = get_scope_guidance(
