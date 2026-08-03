@@ -1,10 +1,10 @@
 # AI Code Review
 
-Automated code review tool with Pull Request integration for Azure DevOps and on-premise TFS and support for multiple LLM providers.
+AI Code Review is an automated AI-powered code review CLI, compatible with various LLM providers, designed for integration with Azure DevOps, whether in the cloud or on-premises. It allows you to run a review on demand or as part of a pipeline triggered before a commit or when a pull request is created.
 
 ## Features
 
-- AI Pull Request review (`pr-review`)
+- AI Pull Request review (`pr-review`
 - Structured PR comments (inline + general summary)
 - `dry-run` mode to validate without posting
 - PR listing with filters (`list-prs`)
@@ -18,10 +18,14 @@ Automated code review tool with Pull Request integration for Azure DevOps and on
 - [Execution Flow](docs/execution_flow.md) - Mermaid diagram of the application's lifecycle.
 - [Troubleshooting](docs/troubleshooting.md) - Common issues and solutions.
 
+## Output Review Format
+
+![Review Output Format Example](/imgs/review_output.png)
+
 ## Installation
 
 Install from PyPI:
-
+s
 ```bash
 pip install code-review-ai-cli
 ```
