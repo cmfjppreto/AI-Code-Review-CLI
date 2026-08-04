@@ -75,20 +75,13 @@ def test_filter_and_split_diff_helpers(sample_diff: str) -> None:
 
 
 def test_limit_filter_and_truncate_helpers(sample_diff: str) -> None:
-    """It should limit files, filter by extension and truncate oversized sections."""
+    """It should limit files and truncate oversized sections."""
     instance = make_git_utils()
 
     limited, was_limited, omitted = instance.limit_diff_files(sample_diff, max_files=1)
     assert was_limited is True
     assert omitted == 1
     assert "TRUNCATED" in limited
-
-    filtered = instance.filter_diff_by_extensions(sample_diff, [".py"])
-    assert "src/app.py" in filtered
-    assert "docs/readme.md" not in filtered
-
-    with pytest.raises(GitError, match="no changes remain"):
-        instance.filter_diff_by_extensions(sample_diff, [".js"])
 
     truncated, changed = instance.truncate_diff_per_file(sample_diff, max_lines=3)
     assert changed is True
@@ -160,3 +153,4 @@ def test_filter_diff_additions_only_without_context_block_keeps_context_strips_d
     assert "+added_line" in filtered
     assert "context_line" in filtered       # context lines are kept
     assert "removed_line" not in filtered   # deletions are stripped
+

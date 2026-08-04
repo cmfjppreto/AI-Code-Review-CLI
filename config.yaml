@@ -90,9 +90,25 @@ review:
   # Limit of diff lines per file (larger sections are truncated)
   max_diff_lines: 4500
 
+  # Max changed logical blocks for Enclosing Scopes strategy (diff_only mode)
+  max_scope_blocks: 8
+
+  # Max lines in a single enclosing scope before falling back to file_skeleton
+  # (prevents sending entire large classes to the LLM)
+  max_scope_lines: 250
+
+  # Surrounding lines to keep for Adaptive Diff fallback (diff_only mode)
+  adaptive_context_lines: 10
+
+  # Exclude paths from the diff (empty list = no exclusions).
+  # Files whose path starts with a listed prefix are excluded.
+  # Matching is case-insensitive.
+  # Example: ["IoT/_input/packages", "libs/generated"]
+  excluded_paths: []
+
   # Filter by file extensions (empty list = all files)
   # Example: [".cs", ".ts"]
-  file_extensions_filter: []
+  file_extensions_filter: [".cs", ".ts"]
 
 # ---------------------------------------------------------------------------
 # Pull Request Review Configuration

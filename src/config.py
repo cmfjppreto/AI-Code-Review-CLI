@@ -93,7 +93,8 @@ class ReviewConfig:
     max_scope_lines: int = 250              # Max lines in a single scope block before fallback to file_skeleton
     adaptive_context_lines: int = 10        # Context lines for Adaptive Diff fallback
     custom_prompt_file: str = "review_prompt.md"  # Markdown file with extra rules/context
-    file_extensions_filter: list = field(default_factory=list)
+    file_extensions_filter: list = field(default_factory=list)  # File extensions to include (empty = all)
+    excluded_paths: list = field(default_factory=list)  # Folder path segments to exclude from diff
 
     # --- PR Review ----------------------------------------------------
     auto_post_comments: bool = False        # Post comments automatically
@@ -222,6 +223,7 @@ class ReviewConfig:
             "adaptive_context_lines": ("review", "adaptive_context_lines"),
             "custom_prompt_file": ("review", "custom_prompt_file"),
             "file_extensions_filter": ("review", "file_extensions_filter"),
+            "excluded_paths": ("review", "excluded_paths"),
             # PR
             "auto_post_comments": ("pr", "auto_post_comments"),
             "dry_run": ("pr", "dry_run"),

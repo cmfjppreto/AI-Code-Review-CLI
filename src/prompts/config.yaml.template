@@ -13,7 +13,7 @@
 llm:
   provider: openai
 
-  # Model to use (empty = provider default)
+# Model to use (empty = provider default)
   # Examples:
   #   openai:  gpt-4o, gpt-4-turbo, gpt-4
   #   gemini:  gemini-1.5-pro, gemini-pro, gemini-2.0-flash
@@ -91,7 +91,7 @@ review:
   max_diff_lines: 4500
 
   # Max changed logical blocks for Enclosing Scopes strategy (diff_only mode)
-  max_scope_blocks: 3
+  max_scope_blocks: 10
 
   # Max lines in a single enclosing scope before falling back to file_skeleton
   # (prevents sending entire large classes to the LLM)
@@ -99,6 +99,12 @@ review:
 
   # Surrounding lines to keep for Adaptive Diff fallback (diff_only mode)
   adaptive_context_lines: 10
+
+  # Exclude paths from the diff by prefix (empty list = no exclusions).
+  # Files whose path starts with a listed prefix are excluded.
+  # Matching is case-insensitive.
+  # Example: ["IoT/_input/packages", "libs/generated"]
+  excluded_paths: []
 
   # Filter by file extensions (empty list = all files)
   # Example: [".cs", ".ts"]

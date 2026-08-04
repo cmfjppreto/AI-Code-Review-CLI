@@ -16,7 +16,8 @@ flowchart TD
   Command -->|pr-review| PRReview
   Command -->|list-prs| ListPRs
 
-  PRReview --> Config[Load config & Init client]
+  PRReview --> Filter[Load config & Init client]
+  Filter --> Config[Apply File Filter path and extension]
   Config --> FetchPR[Fetch PR details & diff]
   FetchPR --> BuildContext[Build AST context & filter files]
   BuildContext --> AI[Run AI review call]
