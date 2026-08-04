@@ -412,6 +412,113 @@ def test_get_pull_request_diff_raises_if_all_filtered(mocker) -> None:
         client.get_pull_request_diff("repo-a", 1, excluded_paths=["IoT"])
 
 
+def test_get_pr_changed_files_handles_null_item(mocker) -> None:
+    """It should not crash and use originalPath as fallback when item is null (deleted files)."""
+    client = TFSClient(make_tfs_config())
+    mocker.patch(
+        "src.tfs_client.TFSClient._get",
+        side_effect=[
+            {"value": [{"id": 1}]},
+            {"changeEntries": [
+                # Deleted file: API returns item=null and provides originalPath instead.
+                {"item": None, "changeType": "delete", "originalPath": "/src/deleted.py"},
+                # Normal file alongside the delete.
+                {"item": {"path": "/src/kept.py"}, "changeType": "edit", "originalPath": ""},
+            ]},
+        ],
+    )
+    result = client._get_pr_changed_files("repo-a", 1)
+
+    # Both entries must be surfaced to the terminal summary without crashing.
+    assert len(result) == 2
+    deleted = next(r for r in result if r["change_type"] == "delete")
+    assert deleted["path"] == "/src/deleted.py"
+    assert deleted["original_path"] == "/src/deleted.py"
+
+
+def test_get_pull_request_diff_skips_deleted_files(mocker) -> None:
+    """Deleted files must be excluded from the LLM diff without raising an error."""
+    client = TFSClient(make_tfs_config())
+    mocker.patch(
+        "src.tfs_client.TFSClient._get",
+        side_effect=[
+            {"sourceRefName": "refs/heads/feature", "targetRefName": "refs/heads/main"},
+            {"value": [{"id": 1}]},
+            {"changeEntries": [
+                # Deleted file — item is null, API provides only originalPath.
+                {"item": None, "changeType": "delete", "originalPath": "/src/removed.py"},
+                # Edited file that should still appear in the diff.
+                {"item": {"path": "/src/app.py"}, "changeType": "edit", "originalPath": "/src/app.py"},
+            ]},
+        ],
+    )
+    unified = mocker.patch(
+        "src.tfs_client.TFSClient._build_unified_diff_part", return_value=["UNIFIED"]
+    )
+
+    result = client.get_pull_request_diff("repo-a", 1)
+
+    # The diff builder must only be called for the edited file, not the deleted one.
+    unified.assert_called_once_with(
+        repository="repo-a",
+        file_path="/src/app.py",
+        original_path="/src/app.py",
+        change_type="edit",
+        source_branch="refs/heads/feature",
+        target_branch="refs/heads/main",
+    )
+    assert "UNIFIED" in result
+
+
+def test_get_pull_request_diff_handles_null_item_in_non_delete(mocker) -> None:
+    """A null item for a non-delete change must not crash; originalPath is used as path fallback."""
+    client = TFSClient(make_tfs_config())
+    mocker.patch(
+        "src.tfs_client.TFSClient._get",
+        side_effect=[
+            {"sourceRefName": "refs/heads/feature", "targetRefName": "refs/heads/main"},
+            {"value": [{"id": 1}]},
+            {"changeEntries": [
+                # Unexpected null item for an edit — defensive case.
+                {"item": None, "changeType": "edit", "originalPath": "/src/fallback.py"},
+            ]},
+        ],
+    )
+    unified = mocker.patch(
+        "src.tfs_client.TFSClient._build_unified_diff_part", return_value=["UNIFIED"]
+    )
+
+    result = client.get_pull_request_diff("repo-a", 1)
+
+    unified.assert_called_once_with(
+        repository="repo-a",
+        file_path="/src/fallback.py",
+        original_path="/src/fallback.py",
+        change_type="edit",
+        source_branch="refs/heads/feature",
+        target_branch="refs/heads/main",
+    )
+    assert "UNIFIED" in result
+
+
+def test_get_pull_request_diff_raises_when_only_deletes_present(mocker) -> None:
+    """It should raise TFSError when the PR contains only deleted files (all skipped)."""
+    client = TFSClient(make_tfs_config())
+    mocker.patch(
+        "src.tfs_client.TFSClient._get",
+        side_effect=[
+            {"sourceRefName": "refs/heads/feature", "targetRefName": "refs/heads/main"},
+            {"value": [{"id": 1}]},
+            {"changeEntries": [
+                {"item": None, "changeType": "delete", "originalPath": "/src/a.py"},
+                {"item": None, "changeType": "delete", "originalPath": "/src/b.py"},
+            ]},
+        ],
+    )
+
+    with pytest.raises(TFSError, match="contains no file changes after filtering"):
+        client.get_pull_request_diff("repo-a", 1)
+
 
 def test_build_diff_parts_and_file_content(mocker) -> None:
     """It should build full-code and unified diff payloads from file content."""
@@ -488,7 +595,12 @@ def test_build_unified_diff_part_context_block_present_on_add(mocker) -> None:
 
 
 def test_build_unified_diff_part_no_context_block_on_delete(mocker) -> None:
-    """_build_unified_diff_part must NOT append any context block when change_type is delete."""
+    """_build_unified_diff_part must NOT append any context block when change_type is delete.
+
+    Note: in production this code path is no longer reached via get_pull_request_diff —
+    deleted entries are filtered out before _build_unified_diff_part is ever called.
+    This test is kept as a defensive contract on the method's own behaviour.
+    """
     client = TFSClient(make_tfs_config())
     mocker.patch(
         "src.tfs_client.TFSClient._get_file_content",

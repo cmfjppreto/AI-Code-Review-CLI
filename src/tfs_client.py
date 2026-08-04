@@ -290,13 +290,16 @@ class TFSClient:
 
         files = []
         for change in changes.get("changeEntries", []):
-            item = change.get("item", {})
+            # `item` can be null for deleted files; use `or {}` as a safe fallback.
+            item = change.get("item") or {}
             if item.get("isFolder"):
                 continue
+            # `path` can be null for deleted files; fall back to `originalPath`.
+            path = item.get("path") or change.get("originalPath") or ""
             files.append({
-                "path": item.get("path", ""),
+                "path": path,
                 "change_type": change.get("changeType", "unknown"),
-                "original_path": change.get("originalPath", ""),
+                "original_path": change.get("originalPath") or path,
             })
         return files
 
@@ -377,13 +380,21 @@ class TFSClient:
         # Build diff from the changes
         diff_parts = []
         for change in changes.get("changeEntries", []):
-            item = change.get("item", {})
+            # `item` can be null for deleted files; use `or {}` as a safe fallback.
+            item = change.get("item") or {}
             change_type = change.get("changeType", "unknown")
-            file_path = item.get("path", "unknown")
-            original_path = change.get("originalPath") or file_path
 
             if item.get("isFolder"):
                 continue
+
+            # Deleted files are skipped from the LLM diff.
+            # They are still reported in the terminal summary via _get_pr_changed_files.
+            if change_type == "delete":
+                continue
+
+            # `path` can be null; fall back to `originalPath` (safe for add/edit/rename).
+            file_path = item.get("path") or change.get("originalPath") or "unknown"
+            original_path = change.get("originalPath") or file_path
 
             # --- Early-exit filters (no HTTP request made for skipped files) ---
             # Normalise once: strip leading slash, lower-case, forward slashes.
@@ -500,7 +511,8 @@ class TFSClient:
             file_path: Server path of the new version of the file.
             original_path: Server path of the old version (differs on renames).
             change_type: TFS change type string (``"edit"``, ``"add"``,
-                ``"rename"``, ``"delete"``, …).
+                ``"rename"``). ``"delete"`` entries are filtered out
+                by the caller before this method is invoked.
             source_branch: Source branch ref (feature branch — new version).
             target_branch: Target branch ref (base branch — old version).
 
