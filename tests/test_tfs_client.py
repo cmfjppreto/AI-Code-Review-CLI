@@ -326,8 +326,91 @@ def test_get_pull_request_diff_raises_for_missing_iterations_or_changes(mocker) 
             {"changeEntries": []},
         ],
     )
-    with pytest.raises(TFSError, match="contains no file changes"):
+    with pytest.raises(TFSError, match="contains no file changes after filtering"):
         client.get_pull_request_diff("repo-a", 1)
+
+
+def test_get_pull_request_diff_filters_excluded_paths(mocker) -> None:
+    """It should filter change entries early based on excluded_paths prefix matching."""
+    client = TFSClient(make_tfs_config())
+    mocker.patch(
+        "src.tfs_client.TFSClient._get",
+        side_effect=[
+            {"sourceRefName": "refs/heads/feature", "targetRefName": "refs/heads/main"},
+            {"value": [{"id": 2}]},
+            {"changeEntries": [
+                {"item": {"path": "/IoT/_input/packages/pkg.json"}, "changeType": "edit"},
+                {"item": {"path": "/src/app.py"}, "changeType": "edit"},
+            ]},
+        ],
+    )
+    unified = mocker.patch("src.tfs_client.TFSClient._build_unified_diff_part", return_value=["UNIFIED"])
+
+    # Exclude IoT/_input/packages. It should skip the first file.
+    result = client.get_pull_request_diff(
+        "repo-a", 1, excluded_paths=["/IoT/_input/packages"]
+    )
+    assert "UNIFIED" in result
+    unified.assert_called_once_with(
+        repository="repo-a",
+        file_path="/src/app.py",
+        original_path="/src/app.py",
+        change_type="edit",
+        source_branch="refs/heads/feature",
+        target_branch="refs/heads/main",
+    )
+
+
+def test_get_pull_request_diff_filters_extensions(mocker) -> None:
+    """It should filter change entries early based on file_extensions_filter."""
+    client = TFSClient(make_tfs_config())
+    mocker.patch(
+        "src.tfs_client.TFSClient._get",
+        side_effect=[
+            {"sourceRefName": "refs/heads/feature", "targetRefName": "refs/heads/main"},
+            {"value": [{"id": 2}]},
+            {"changeEntries": [
+                {"item": {"path": "/src/app.py"}, "changeType": "edit"},
+                {"item": {"path": "/docs/readme.md"}, "changeType": "edit"},
+            ]},
+        ],
+    )
+    unified = mocker.patch("src.tfs_client.TFSClient._build_unified_diff_part", return_value=["UNIFIED"])
+
+    # Filter to only keep .py
+    result = client.get_pull_request_diff(
+        "repo-a", 1, file_extensions_filter=[".py"]
+    )
+    assert "UNIFIED" in result
+    unified.assert_called_once_with(
+        repository="repo-a",
+        file_path="/src/app.py",
+        original_path="/src/app.py",
+        change_type="edit",
+        source_branch="refs/heads/feature",
+        target_branch="refs/heads/main",
+    )
+
+
+def test_get_pull_request_diff_raises_if_all_filtered(mocker) -> None:
+    """It should raise a TFSError if all files are filtered out."""
+    client = TFSClient(make_tfs_config())
+    mocker.patch(
+        "src.tfs_client.TFSClient._get",
+        side_effect=[
+            {"sourceRefName": "refs/heads/feature", "targetRefName": "refs/heads/main"},
+            {"value": [{"id": 2}]},
+            {"changeEntries": [
+                {"item": {"path": "/IoT/_input/packages/pkg.json"}, "changeType": "edit"},
+            ]},
+        ],
+    )
+    mocker.patch("src.tfs_client.TFSClient._build_unified_diff_part", return_value=["UNIFIED"])
+
+    # Exclude IoT. All files are filtered, raising TFSError
+    with pytest.raises(TFSError, match="contains no file changes after filtering"):
+        client.get_pull_request_diff("repo-a", 1, excluded_paths=["IoT"])
+
 
 
 def test_build_diff_parts_and_file_content(mocker) -> None:

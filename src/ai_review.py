@@ -79,7 +79,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = _ensure_project_root_on_path(__file__)
 
 from src.config import ReviewConfig, VALID_PROVIDERS  # noqa: E402
-from src.git_utils import GitUtils, GitError  # noqa: E402
+from src.git_utils import GitUtils  # noqa: E402
 from src.llm_client import LLMClient, LLMError  # noqa: E402
 from src.formatter import ReviewFormatter, Colors, save_output  # noqa: E402
 from src import __version__ as VERSION  # noqa: E402
@@ -426,6 +426,8 @@ def run_pr_review_workflow(args: argparse.Namespace, config: ReviewConfig,
             repo_name,
             pr_id,
             review_scope=config.review_scope,
+            excluded_paths=config.excluded_paths or None,
+            file_extensions_filter=config.file_extensions_filter or None,
         )
     except TFSError as exc:
         print(formatter.format_error(str(exc)))
@@ -450,17 +452,6 @@ def run_pr_review_workflow(args: argparse.Namespace, config: ReviewConfig,
     # Get diff files summary
     git_utils = GitUtils.__new__(GitUtils)
     git_utils.repo_path = os.getcwd()
-
-    # Filter extensions before limiting/truncating the diff sent to the LLM
-    if config.file_extensions_filter:
-        try:
-            diff = git_utils.filter_diff_by_extensions(
-                diff,
-                config.file_extensions_filter,
-            )
-        except GitError as exc:
-            print(formatter.format_warning(str(exc)))
-            return 0
 
     # Keep only added lines (+): ignore context and removed lines
     diff = git_utils.filter_diff_additions_only(diff)

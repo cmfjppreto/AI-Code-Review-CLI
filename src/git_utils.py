@@ -189,44 +189,6 @@ class GitUtils:
         )
         return limited, True, omitted_files
 
-    def filter_diff_by_extensions(self, diff: str, extensions: list[str]) -> str:
-        """
-        Filters the diff to include only files with specific extensions.
-        
-        Args:
-            diff: The full diff.
-            extensions: List of extensions (e.g., ['.py', '.js', '.cs']).
-        """
-        if not extensions:
-            return diff
-
-        filtered_sections = []
-        current_section: list[str] = []
-        include_section = False
-
-        for line in diff.split("\n"):
-            if line.startswith("diff --git"):
-                # Save previous section if applicable
-                if include_section and current_section:
-                    filtered_sections.append("\n".join(current_section))
-                current_section = [line]
-                # Check if file has an allowed extension
-                file_path = line.split(" b/")[-1] if " b/" in line else ""
-                include_section = any(file_path.endswith(ext) for ext in extensions)
-            else:
-                current_section.append(line)
-
-        # Last section
-        if include_section and current_section:
-            filtered_sections.append("\n".join(current_section))
-
-        result = "\n".join(filtered_sections)
-        if not result.strip():
-            raise GitError(
-                f"After filtering by extensions {extensions}, no changes remain."
-            )
-        return result
-
     def truncate_diff(self, diff: str, max_lines: int = 2000) -> tuple[str, bool]:
         """
         Kept for compatibility: applies per-file truncation when

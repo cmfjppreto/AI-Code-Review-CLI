@@ -358,3 +358,29 @@ def test_find_file_checks_cwd_then_repo_root(tmp_path: Path, monkeypatch: pytest
     found = config_module._find_file("config.yaml")
 
     assert found == str(direct_file.resolve())
+
+
+def test_excluded_paths_defaults_to_empty_list() -> None:
+    """ReviewConfig.excluded_paths must default to an empty list."""
+    config = ReviewConfig()
+
+    assert config.excluded_paths == []
+    assert isinstance(config.excluded_paths, list)
+
+
+def test_load_yaml_maps_excluded_paths(temp_config_file) -> None:
+    """excluded_paths under review: must be loaded from YAML into the dataclass."""
+    config = ReviewConfig()
+    config._load_yaml(
+        temp_config_file(
+            """
+review:
+  excluded_paths:
+    - migrations
+    - node_modules
+    - tests/fixtures
+""".strip()
+        )
+    )
+
+    assert config.excluded_paths == ["migrations", "node_modules", "tests/fixtures"]

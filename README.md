@@ -4,12 +4,13 @@ AI Code Review is an automated AI-powered code review CLI, compatible with vario
 
 ## Features
 
-- AI Pull Request review (`pr-review`
+- AI Pull Request review (`pr-review`)
 - Structured PR comments (inline + general summary)
 - `dry-run` mode to validate without posting
 - PR listing with filters (`list-prs`)
 - Configuration exclusively via `config.yaml`
 - Providers LLM: OpenAI, Azure OpenAI, Gemini, Claude, Ollama, GitHub Copilot, AWS Bedrock
+- Diff filtering by **excluded path prefixes** (`excluded_paths`) and/or **file extensions** (`file_extensions_filter`)
 
 ## Documentation
 
@@ -82,6 +83,9 @@ review:
   max_diff_lines: 2000
   # extension allowlist (empty list = all files)
   file_extensions_filter: [".cs", ".ts", ".py"]
+  # exclude path prefixes from the diff (applied before file_extensions_filter)
+  # leading slash is optional; add trailing slash for exact folder boundary
+  excluded_paths: ["libs/generated"]
 
 pr:
   auto_post_comments: false

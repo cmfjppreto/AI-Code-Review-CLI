@@ -301,7 +301,9 @@ class TFSClient:
         return files
 
     def get_pull_request_diff(self, repository: str, pr_id: int,
-                              review_scope: str = "diff_only") -> str:
+                              review_scope: str = "diff_only",
+                              excluded_paths: list[str] | None = None,
+                              file_extensions_filter: list[str] | None = None) -> str:
         """
         Gets the diff of a specific Pull Request.
 
@@ -317,16 +319,28 @@ class TFSClient:
         with ``+``, producing a pseudo-diff that represents the complete file
         as added content.
 
+        Files are filtered **before** any HTTP content request is made, so
+        excluded or extension-mismatched files incur no network cost.
+
         Args:
             repository: Repository name.
             pr_id: Pull Request ID.
             review_scope: ``"diff_only"`` (default) or ``"full_code"``.
+            excluded_paths: List of path prefixes to skip (case-insensitive,
+                leading slash optional). Files whose path starts with any
+                prefix are excluded before content is fetched.
+                Example: ``["/Libs/", "/IoT/_input/packages"]``.
+            file_extensions_filter: Allowlist of file extensions
+                (case-insensitive). When non-empty, only files whose path ends
+                with one of the listed extensions are processed.
+                Example: ``[".cs", ".ts"]``.
 
         Returns:
             Diff as text, ready to be passed to the LLM client.
 
         Raises:
-            TFSError: If the PR has no iterations or contains no file changes.
+            TFSError: If the PR has no iterations or contains no file changes
+                after filtering.
         """
         # Get PR details
         path = f"git/repositories/{repository}/pullrequests/{pr_id}"
@@ -352,6 +366,14 @@ class TFSClient:
 
         review_scope = (review_scope or "diff_only").lower()
 
+        # Normalise filters once before the loop (forward slashes, lower-case).
+        # excluded_paths: strip optional leading slash so "Libs/" == "/Libs/".
+        _excl_prefixes = [
+            p.replace("\\", "/").lstrip("/").lower()
+            for p in (excluded_paths or [])
+        ]
+        _ext_filter = [e.lower() for e in (file_extensions_filter or [])]
+
         # Build diff from the changes
         diff_parts = []
         for change in changes.get("changeEntries", []):
@@ -362,6 +384,21 @@ class TFSClient:
 
             if item.get("isFolder"):
                 continue
+
+            # --- Early-exit filters (no HTTP request made for skipped files) ---
+            # Normalise once: strip leading slash, lower-case, forward slashes.
+            norm_path = file_path.replace("\\", "/").lstrip("/").lower()
+
+            if _excl_prefixes and any(
+                norm_path.startswith(excl) for excl in _excl_prefixes
+            ):
+                continue
+
+            if _ext_filter and not any(
+                norm_path.endswith(ext) for ext in _ext_filter
+            ):
+                continue
+            # ------------------------------------------------------------------
 
             if review_scope == "full_code":
                 diff_parts.extend(
@@ -388,7 +425,7 @@ class TFSClient:
             diff_parts.append("")
 
         if not diff_parts:
-            raise TFSError(f"PR #{pr_id} contains no file changes.")
+            raise TFSError(f"PR #{pr_id} contains no file changes after filtering.")
 
         return "\n".join(diff_parts)
 
