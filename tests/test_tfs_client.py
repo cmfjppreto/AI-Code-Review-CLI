@@ -326,8 +326,8 @@ def test_get_pull_request_diff_raises_for_missing_iterations_or_changes(mocker) 
             {"changeEntries": []},
         ],
     )
-    with pytest.raises(TFSError, match="contains no file changes after filtering"):
-        client.get_pull_request_diff("repo-a", 1)
+    result = client.get_pull_request_diff("repo-a", 1)
+    assert result == ""
 
 
 def test_get_pull_request_diff_filters_excluded_paths(mocker) -> None:
@@ -392,8 +392,8 @@ def test_get_pull_request_diff_filters_extensions(mocker) -> None:
     )
 
 
-def test_get_pull_request_diff_raises_if_all_filtered(mocker) -> None:
-    """It should raise a TFSError if all files are filtered out."""
+def test_get_pull_request_diff_returns_empty_if_all_filtered(mocker) -> None:
+    """It should return an empty string (not raise) if all files are filtered out."""
     client = TFSClient(make_tfs_config())
     mocker.patch(
         "src.tfs_client.TFSClient._get",
@@ -407,9 +407,9 @@ def test_get_pull_request_diff_raises_if_all_filtered(mocker) -> None:
     )
     mocker.patch("src.tfs_client.TFSClient._build_unified_diff_part", return_value=["UNIFIED"])
 
-    # Exclude IoT. All files are filtered, raising TFSError
-    with pytest.raises(TFSError, match="contains no file changes after filtering"):
-        client.get_pull_request_diff("repo-a", 1, excluded_paths=["IoT"])
+    # Exclude IoT. All files are filtered — returns empty string instead of raising.
+    result = client.get_pull_request_diff("repo-a", 1, excluded_paths=["IoT"])
+    assert result == ""
 
 
 def test_get_pr_changed_files_handles_null_item(mocker) -> None:
@@ -501,8 +501,8 @@ def test_get_pull_request_diff_handles_null_item_in_non_delete(mocker) -> None:
     assert "UNIFIED" in result
 
 
-def test_get_pull_request_diff_raises_when_only_deletes_present(mocker) -> None:
-    """It should raise TFSError when the PR contains only deleted files (all skipped)."""
+def test_get_pull_request_diff_returns_empty_when_only_deletes_present(mocker) -> None:
+    """It should return an empty string (not raise) when the PR contains only deleted files."""
     client = TFSClient(make_tfs_config())
     mocker.patch(
         "src.tfs_client.TFSClient._get",
@@ -516,8 +516,8 @@ def test_get_pull_request_diff_raises_when_only_deletes_present(mocker) -> None:
         ],
     )
 
-    with pytest.raises(TFSError, match="contains no file changes after filtering"):
-        client.get_pull_request_diff("repo-a", 1)
+    result = client.get_pull_request_diff("repo-a", 1)
+    assert result == ""
 
 
 def test_build_diff_parts_and_file_content(mocker) -> None:

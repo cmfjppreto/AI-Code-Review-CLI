@@ -342,8 +342,7 @@ class TFSClient:
             Diff as text, ready to be passed to the LLM client.
 
         Raises:
-            TFSError: If the PR has no iterations or contains no file changes
-                after filtering.
+            TFSError: If the PR has no iterations.
         """
         # Get PR details
         path = f"git/repositories/{repository}/pullrequests/{pr_id}"
@@ -436,7 +435,7 @@ class TFSClient:
             diff_parts.append("")
 
         if not diff_parts:
-            raise TFSError(f"PR #{pr_id} contains no file changes after filtering.")
+            return ""
 
         return "\n".join(diff_parts)
 
